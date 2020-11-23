@@ -16,58 +16,47 @@ import pickle
 import re
 import time
 from tqdm import tqdm
+import os
+from slugify import slugify
 
-# # Get the page with the list of links to spells
-# driver = webdriver.Chrome()
-# driver.get("https://www.dnd-spells.com/spells")
+# Get the page with the list of links to spells
+driver = webdriver.Chrome()
+driver.get("https://www.dnd-spells.com/spells")
 
-# page_soup = BeautifulSoup(driver.page_source, 'html.parser')
-# # Okay so its the first a tag in each row in the tbody of the table with id 'example'
-# table = page_soup.find('table', id="example")
-# tbody = table.find('tbody')
-# rows = tbody.find_all('tr')
-# links = [row.find('a')['href'] for row in rows]
+page_soup = BeautifulSoup(driver.page_source, 'html.parser')
+# Okay so its the first a tag in each row in the tbody of the table with id 'example'
+table = page_soup.find('table', id="example")
+tbody = table.find('tbody')
+rows = tbody.find_all('tr')
+links = [row.find('a')['href'] for row in rows]
 
-# # for i in range(100):
-# #     print(links[i])
+driver.quit()
 
-# driver.quit()
-
-# pickle.dump(links, open("links_to_parse.pckl", "wb"))
+pickle.dump(links, open("links_to_parse.pckl", "wb"))
 
 links = pickle.load(open("links_to_parse.pckl", "rb"))
 
-# TODO make folders and save results to text files
-
 cnt = 0
+spell_texts = {}
 for link in tqdm(links):
-    print("\n\n\n")
+    print(link)
     time.sleep(2) # Don't spam this site
     page = requests.get(link)
     page_soup = BeautifulSoup(page.content, 'html.parser')
-    # sometimes the "at higher level" section is there, sometimes it is not
-    # use .find(string='blah') to find text in an element
-    # well it looks like i'll have to manually code each part it should take in...
 
     heading = page_soup.find("h1", attrs={"class":"classic-title"})
     cur_el = heading
-    # spell_name = cur_el.find("span").string
     spell_name = cur_el.get_text()
-    print(spell_name)
 
-    # spell_school = spell_name_span.next_element.string
     cur_el = cur_el.find_next_sibling("p")
     spell_school = cur_el.get_text()
-    print(spell_school)
 
     cur_el = cur_el.find_next_sibling("p")
-    # SO gave me a good regex to use to get rid of excessive spacing
+    # Stack Overflow gave me a good regex to use to get rid of excessive spacing
     spell_stats = re.sub(r"\s{4,}","\n",cur_el.get_text().strip())
-    print(spell_stats)
 
     cur_el = cur_el.find_next_sibling("p")
     spell_description = cur_el.get_text().strip()
-    print(spell_description)
 
     # Some spells have a description of what changes if you cast them at higher level
     if "At higher level" in cur_el.find_next_sibling("h4").get_text():
@@ -75,17 +64,29 @@ for link in tqdm(links):
         spell_upcast_desc = "At higher levels: " + cur_el.get_text().strip()
     else:
         spell_upcast_desc = ""
-    print(spell_upcast_desc)
 
     cur_el = cur_el.find_next_sibling("p")
     spell_book_location = cur_el.get_text().strip()
-    print(spell_book_location)
 
     cur_el = cur_el.find_next_sibling("p")
     # We gotta replace rediculous spacing again
     spell_classes = re.sub(r"\s{4,}"," ",cur_el.get_text().strip())
-    print(spell_classes)
+    spell_texts[spell_name] = (spell_name + "\n" + \
+                            spell_school + "\n" + \
+                            spell_stats + "\n" + \
+                            spell_description + "\n" + \
+                            spell_upcast_desc + "\n" + \
+                            spell_book_location + "\n" + \
+                            spell_classes).encode("ascii", "ignore")
 
-    if cnt > 10:
-        break
-    cnt += 1
+pickle.dump(spell_texts, open("spell_texts.pckl", "wb"))
+
+spell_texts = pickle.load(open("spell_texts.pckl", "rb"))
+
+# Maybe I'm being too explicit here...
+if not os.path.exists(os.path.join(os.getcwd(), "spells")):
+    os.makedirs(os.path.join(os.getcwd(), "spells"))
+
+for name, text in spell_texts.items():
+    with open(os.path.join("spells", slugify(name)) + ".txt", "wb+") as fil:
+        fil.write(text)

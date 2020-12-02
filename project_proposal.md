@@ -8,7 +8,7 @@ If generating spells proves infeasible or is easy, other options include generat
 
 ## Approach
 
-The initial approach will be to use GURs and/or LSTMs, most likely using an initial architecture similar to Google's Neural Machine Translation architecture.
+The initial approach will be to use GRUs and/or LSTMs, most likely using an initial architecture similar to Google's Neural Machine Translation architecture.
 If it makes more sense or the previous method is not viable, I will switch to using transformer architectures.
 Finally, I will attempt to learn more about and train a custom BERT model.
 I will develop custom loss functions attempting to optimize the validity and balance of generated content as well, although this will be one of the more difficult parts of the project.

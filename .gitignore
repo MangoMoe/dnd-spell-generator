@@ -3,3 +3,8 @@
 test.html
 *.pckl
 spells/
+model_save.ckpt
+*.ckpt
+*.tar.gz
+*.txt
+*.sh

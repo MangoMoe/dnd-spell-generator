@@ -108,6 +108,7 @@ class GRU_Net(nn.Module):
 
 # %%
 # construct the dataset
+# TODO switch this to use utils_spell.py if you come back to this model
 spells_list = []
 for fil in glob.glob("spells/*.txt"):
     with open(fil) as spell_file:

@@ -33,7 +33,6 @@ class CustomTransformer(nn.Module):
         self.output_embedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
 
         # TODO starting with default parameters and changing as need be
-        print("d_model: {}".format(d_model))
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=1)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=3)
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=1)
@@ -288,3 +287,262 @@ print(src_key_padding_mask.size())
 # output =  encoder(src, src_mask)
 # output =  encoder(src, src_key_padding_mask=src_key_padding_mask)
 output =  encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
+
+
+
+
+
+# %% 
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class TransformerModel(nn.Module):
+
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        super(TransformerModel, self).__init__()
+        from torch.nn import TransformerEncoder, TransformerEncoderLayer
+        self.model_type = 'Transformer'
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.encoder = nn.Embedding(ntoken, ninp)
+        self.ninp = ninp
+        self.decoder = nn.Linear(ninp, ntoken)
+
+        self.init_weights()
+
+    def generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def init_weights(self):
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src, src_mask):
+        src = self.encoder(src) * math.sqrt(self.ninp)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, src_mask)
+        output = self.decoder(output)
+        return output
+# %%
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+# %%
+import os
+print(os.getcwd())
+# %%
+import io
+import torch
+from torchtext.utils import download_from_url, extract_archive
+from torchtext.data.utils import get_tokenizer
+from torchtext.vocab import build_vocab_from_iterator
+
+# url = 'https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-v1.zip'
+# test_filepath, valid_filepath, train_filepath = extract_archive(download_from_url(url))
+tokenizer = get_tokenizer('basic_english')
+# TODO maybe you can use this function on your spells list
+spells_text = load_spells_list()
+vocab = build_vocab_from_iterator(map(tokenizer, spells_text))
+# vocab = build_vocab_from_iterator(map(tokenizer,
+#                                       iter(io.open(train_filepath,
+#                                                    encoding="utf8"))))
+print(vocab)
+
+def data_process(raw_text_iter):
+  data = [torch.tensor([vocab[token] for token in tokenizer(item)],
+                       dtype=torch.long) for item in raw_text_iter]
+  return torch.cat(tuple(filter(lambda t: t.numel() > 0, data)))
+
+# train_data = data_process(iter(io.open(train_filepath, encoding="utf8")))
+# val_data = data_process(iter(io.open(valid_filepath, encoding="utf8")))
+# test_data = data_process(iter(io.open(test_filepath, encoding="utf8")))
+train_data = data_process(spells_text)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def batchify(data, bsz):
+    # Divide the dataset into bsz parts.
+    nbatch = data.size(0) // bsz
+    # Trim off any extra elements that wouldn't cleanly fit (remainders).
+    data = data.narrow(0, 0, nbatch * bsz)
+    # Evenly divide the data across the bsz batches.
+    data = data.view(bsz, -1).t().contiguous()
+    return data.to(device)
+
+batch_size = 20
+eval_batch_size = 10
+train_data = batchify(train_data, batch_size)
+# val_data = batchify(val_data, eval_batch_size)
+# test_data = batchify(test_data, eval_batch_size)
+
+# %%
+bptt = 35
+def get_batch(source, i):
+    seq_len = min(bptt, len(source) - 1 - i)
+    data = source[i:i+seq_len]
+    target = source[i+1:i+1+seq_len].reshape(-1)
+    return data, target
+# %%
+ntokens = len(vocab.stoi) # the size of vocabulary
+emsize = 200 # embedding dimension
+nhid = 200 # the dimension of the feedforward network model in nn.TransformerEncoder
+nlayers = 2 # the number of nn.TransformerEncoderLayer in nn.TransformerEncoder
+nhead = 2 # the number of heads in the multiheadattention models
+dropout = 0.2 # the dropout value
+model = TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
+
+# %%
+criterion = nn.CrossEntropyLoss()
+# TODO these might need a look...
+# lr = 5.0 # learning rate
+lr = 1e-3 # learning rate
+# optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+# scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+scheduler = None
+
+import time
+def train():
+    model.train() # Turn on the train mode
+    total_loss = 0.
+    start_time = time.time()
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
+        data, targets = get_batch(train_data, i)
+        optimizer.zero_grad()
+        if data.size(0) != bptt:
+            src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+        output = model(data, src_mask)
+        loss = criterion(output.view(-1, ntokens), targets)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+
+        total_loss += loss.item()
+        log_interval = 200
+        if batch % log_interval == 0 and batch > 0:
+            cur_loss = total_loss / log_interval
+            elapsed = time.time() - start_time
+            print('| epoch {:3d} | {:5d}/{:5d} batches | '
+                  'lr {:02.2f} | ms/batch {:5.2f} | '
+                  'loss {:5.2f} | ppl {:8.2f}'.format(
+                    # epoch, batch, len(train_data) // bptt, scheduler.get_lr()[0],
+                    epoch, batch, len(train_data) // bptt, lr,
+                    elapsed * 1000 / log_interval,
+                    cur_loss, math.exp(cur_loss)))
+            total_loss = 0
+            start_time = time.time()
+
+def evaluate(eval_model, data_source):
+    eval_model.eval() # Turn on the evaluation mode
+    total_loss = 0.
+    src_mask = model.generate_square_subsequent_mask(bptt).to(device)
+    with torch.no_grad():
+        for i in range(0, data_source.size(0) - 1, bptt):
+            data, targets = get_batch(data_source, i)
+            if data.size(0) != bptt:
+                src_mask = model.generate_square_subsequent_mask(data.size(0)).to(device)
+            output = eval_model(data, src_mask)
+            output_flat = output.view(-1, ntokens)
+            total_loss += len(data) * criterion(output_flat, targets).item()
+    return total_loss / (len(data_source) - 1)
+# %%
+best_val_loss = float("inf")
+epochs = 20 # The number of epochs
+best_model = None
+
+for epoch in range(1, epochs + 1):
+    epoch_start_time = time.time()
+    train()
+    # val_loss = evaluate(model, val_data)
+    val_loss = evaluate(model, train_data)
+    print('-' * 89)
+    print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+          'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
+                                     val_loss, math.exp(val_loss)))
+    print('-' * 89)
+
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model = model
+
+    if scheduler is not None:
+        scheduler.step()
+# %%
+# TODO we never really gave it start, stop, and blank tokens, is this a problem?
+
+def create_tensor_from_string(string, vocab):
+    pre_tens = []
+    words = string.split()
+    for word in words:
+        pre_tens.append(vocab.stoi[word])
+    return torch.Tensor(pre_tens).long().to(device)
+
+def decode_tensor_to_string(tens, vocab):
+    string = ""
+    for val in tens:
+        # print(val.size())
+        string += vocab.itos[val] + " "
+    return string
+
+# TODO this is a start, but now we need to make the freaking decoder and pass the output as memory I think
+# TODO look at the `get_batch` function
+model.eval()
+
+def pick_next_word(start, vocab, model):
+    num_words = len(start.split())
+    start_tens = create_tensor_from_string(start, vocab)
+    # print(start_tens)
+    # print(decode_tensor_to_string(start_tens, vocab))
+    src_mask = model.generate_square_subsequent_mask(len(start.split())).to(device)
+    mask = (torch.ones(num_words, num_words) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0)).to(device)
+    # print("src_mask size: {}".format(src_mask.size()))
+    # print(start_tens.size())
+    out = model(start_tens, src_mask)
+    # out = model(start_tens, mask)
+    out = out.view(-1, ntokens)
+    # print(out.size())
+    # print(out.view(-1, ntokens).size())
+    # TODO so I'm not really sure this output can be considered as log probabilities, its just an encoder? but maybe
+    out = F.softmax(out, 1)
+    out_ind = torch.max(out, 1)[1].long()
+    # print(out_ind)
+    # print("And finally:")
+    out_strings = decode_tensor_to_string(out_ind[:len(start.split())], vocab)
+    new_string = out_strings.split()[-1]
+    # print(out_strings)
+    # print(start +" "+ new_string)
+    return new_string
+    # print(decode_tensor_to_string(out_ind[:len(start.split())], vocab))
+
+# start = "choose a creature within range"
+start = "make a melee spell attack"
+for i in range(10):
+    start += " " + pick_next_word(start, vocab, model)
+
+final = start
+print(final)
+
+# %%
